@@ -40,8 +40,7 @@ ALL_USERS_REFRESH_IN_MINUTES = 15
 # Необходимые права доступа для работы скрипта
 NEEDED_PERMISSIONS = [
     "directory:read_users",
-    "directory:write_users",
-    "directory:read_organization",
+    "directory:write_users"
 ]
 
 # Настройка логирования
