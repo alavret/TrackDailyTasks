@@ -259,7 +259,7 @@ def run(settings: SettingParams) -> bool:
     all_users_for_deletion = get_users_for_deletion(blocked_users, settings.delete_after_locked_days, settings.value_for_empty_date)
     
     # Загружаем исключения и фильтруем
-    exceptions_set = load_blocked_users_exceptions()
+    exceptions_set = load_blocked_users_exceptions(settings)
     users_for_deletion, exception_users = filter_exception_users(all_users_for_deletion, exceptions_set)
     
     if exception_users:

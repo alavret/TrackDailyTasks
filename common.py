@@ -29,7 +29,6 @@ MAX_RETRIES = 3
 RETRIES_DELAY_SEC = 2
 LOG_FILE = "track_tasks.log"
 SMTP_TIMEOUT = 10
-BLOCKED_USERS_EXCEPTIONS_FILE = "blocked_users_exceptions.txt"
 
 # Интервал проверок в режиме --auto (в секундах)
 AUTO_CHECK_INTERVAL_SEC = 3600  # 1 час
@@ -96,6 +95,9 @@ class SettingParams:
     license_warning_message_subject: str  # Тема письма для отчёта о лицензиях (также для поиска подтверждений)
     waiting_confirmation_subject: str  # Тема письма ожидания подтверждения удаления
     approved_senders: list  # Список email адресов одобренных отправителей
+    
+    # Файл исключений для заблокированных пользователей
+    blocked_users_exceptions_file: str
     
     # Кэш пользователей
     all_users: list
@@ -226,6 +228,7 @@ def get_settings():
         license_warning_message_subject=os.environ.get("LICENSE_WARNING_MESSAGE_SUBJECT", "[Yandex 360] Отчёт о лицензиях"),
         waiting_confirmation_subject=os.environ.get("WAITING_CONFIRMATION_SUBJECT", "[Yandex 360] Ожидание подтверждения"),
         approved_senders=[s.strip().lower() for s in os.environ.get("APPROVED_SENDERS", "").split(",") if s.strip()],
+        blocked_users_exceptions_file=os.environ.get("BLOCKED_USERS_EXCEPTIONS_FILE", "blocked_users_exceptions.txt"),
         all_users=[],
         all_users_get_timestamp=datetime.now(),
         run_modules=run_modules,
@@ -1140,7 +1143,7 @@ def is_user_confirmed(user: dict, confirmed_set: set) -> bool:
     return False
 
 
-def load_blocked_users_exceptions() -> set:
+def load_blocked_users_exceptions(settings: SettingParams) -> set:
     """
     Загружает список исключений для заблокированных пользователей из файла.
     
@@ -1152,16 +1155,19 @@ def load_blocked_users_exceptions() -> set:
         - Строки, начинающиеся с # - комментарии (игнорируются)
         - Пустые строки игнорируются
     
+    Args:
+        settings: Параметры настроек скрипта
+    
     Returns:
         set: Множество идентификаторов исключений (в нижнем регистре)
     """
     exceptions_set = set()
     
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    exceptions_file = os.path.join(script_dir, BLOCKED_USERS_EXCEPTIONS_FILE)
+    exceptions_file = os.path.join(script_dir, settings.blocked_users_exceptions_file)
     
     if not os.path.exists(exceptions_file):
-        logger.debug(f"Файл исключений {BLOCKED_USERS_EXCEPTIONS_FILE} не найден.")
+        logger.debug(f"Файл исключений {settings.blocked_users_exceptions_file} не найден.")
         return exceptions_set
     
     try:
@@ -1174,7 +1180,7 @@ def load_blocked_users_exceptions() -> set:
                 exceptions_set.add(line.lower())
         
         if exceptions_set:
-            logger.info(f"Загружено {len(exceptions_set)} исключений из {BLOCKED_USERS_EXCEPTIONS_FILE}")
+            logger.info(f"Загружено {len(exceptions_set)} исключений из {settings.blocked_users_exceptions_file}")
             logger.debug(f"Исключения: {exceptions_set}")
         
     except Exception as e:

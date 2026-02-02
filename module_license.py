@@ -240,7 +240,7 @@ def run(settings: SettingParams) -> bool:
     sorted_blocked = sort_blocked_users_by_lock_date(blocked_users, settings.value_for_empty_date)
     
     # Загружаем исключения
-    exceptions_set = load_blocked_users_exceptions()
+    exceptions_set = load_blocked_users_exceptions(settings)
     
     # Находим пользователей, которые скоро будут удалены
     all_near_deletion = get_users_near_deletion(
