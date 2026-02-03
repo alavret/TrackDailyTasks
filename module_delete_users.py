@@ -15,6 +15,7 @@ from common import (
     get_settings,
     get_all_users,
     get_blocked_users,
+    enrich_users,
     get_users_for_deletion,
     parse_date,
     format_user_info,
@@ -32,12 +33,15 @@ def generate_deletion_report_html(
     deleted_users: list, 
     not_confirmed_users: list,
     is_dry_run: bool,
-    exception_users: list = None
+    exception_users: list = None,
+    delegated_or_forwarding_users: list = None
 ) -> str:
     """Генерирует HTML-содержимое для письма об удалении пользователей с учётом подтверждения."""
     
     if exception_users is None:
         exception_users = []
+    if delegated_or_forwarding_users is None:
+        delegated_or_forwarding_users = []
     
     action_word = "могли быть удалены" if is_dry_run else "были удалены"
     title = "Предупреждение: пользователи могут быть удалены" if is_dry_run else "Отчёт об удалении пользователей"
@@ -80,6 +84,8 @@ def generate_deletion_report_html(
             <th>Email</th>
             <th>Дата блокировки</th>
             <th>ID</th>
+            <th>Делегирован</th>
+            <th>Правила пересылки</th>
         </tr>
 """
         
@@ -99,6 +105,9 @@ def generate_deletion_report_html(
             else:
                 lock_date_formatted = 'неизвестно'
             
+            is_delegated = "✅ Да" if user.get('isDelegated', False) else "❌ Нет"
+            has_forwarding = "✅ Да" if user.get('hasForwardingRules', False) else "❌ Нет"
+            
             html += f"""
         <tr>
             <td>{idx}</td>
@@ -107,6 +116,8 @@ def generate_deletion_report_html(
             <td>{user_email}</td>
             <td>{lock_date_formatted}</td>
             <td>{user_id}</td>
+            <td>{is_delegated}</td>
+            <td>{has_forwarding}</td>
         </tr>
 """
         
@@ -145,6 +156,8 @@ def generate_deletion_report_html(
             <th>Email</th>
             <th>Дата блокировки</th>
             <th>ID</th>
+            <th>Делегирован</th>
+            <th>Правила пересылки</th>
         </tr>
 """
         
@@ -164,6 +177,9 @@ def generate_deletion_report_html(
             else:
                 lock_date_formatted = 'неизвестно'
             
+            is_delegated = "✅ Да" if user.get('isDelegated', False) else "❌ Нет"
+            has_forwarding = "✅ Да" if user.get('hasForwardingRules', False) else "❌ Нет"
+            
             html += f"""
         <tr class="not-confirmed">
             <td>{idx}</td>
@@ -172,6 +188,8 @@ def generate_deletion_report_html(
             <td>{user_email}</td>
             <td>{lock_date_formatted}</td>
             <td>{user_id}</td>
+            <td>{is_delegated}</td>
+            <td>{has_forwarding}</td>
         </tr>
 """
         
@@ -189,6 +207,8 @@ def generate_deletion_report_html(
             <th>Email</th>
             <th>Дата блокировки</th>
             <th>ID</th>
+            <th>Делегирован</th>
+            <th>Правила пересылки</th>
         </tr>
 """
         for idx, user in enumerate(exception_users, 1):
@@ -204,6 +224,9 @@ def generate_deletion_report_html(
             else:
                 lock_date_formatted = '<span class="info">не установлена</span>'
             
+            is_delegated = "✅ Да" if user.get('isDelegated', False) else "❌ Нет"
+            has_forwarding = "✅ Да" if user.get('hasForwardingRules', False) else "❌ Нет"
+            
             html += f"""
         <tr>
             <td>{idx}</td>
@@ -212,6 +235,54 @@ def generate_deletion_report_html(
             <td>{user_email}</td>
             <td>{lock_date_formatted}</td>
             <td>{user_id}</td>
+            <td>{is_delegated}</td>
+            <td>{has_forwarding}</td>
+        </tr>
+"""
+        html += "    </table>\n"
+    
+    if delegated_or_forwarding_users:
+        html += f"""
+    <h2>⚠️ Пользователи, исключённые из удаления (делегирование/пересылка)</h2>
+    <p>Следующие пользователи имеют делегированные почтовые ящики или настроенные правила пересылки и не могут быть автоматически удалены.</p>
+    <table>
+        <tr>
+            <th>№</th>
+            <th>ФИО</th>
+            <th>Логин</th>
+            <th>Email</th>
+            <th>Дата блокировки</th>
+            <th>ID</th>
+            <th>Делегирован</th>
+            <th>Правила пересылки</th>
+        </tr>
+"""
+        for idx, user in enumerate(delegated_or_forwarding_users, 1):
+            name = user.get('name', {})
+            full_name = f"{name.get('last', '')} {name.get('first', '')} {name.get('middle', '')}".strip()
+            nickname = user.get('nickname', '')
+            user_email = user.get('email', '')
+            user_id = user.get('id', '')
+            lock_date = user.get('isEnabledUpdatedAt', '')
+            parsed_date = parse_date(lock_date)
+            if parsed_date:
+                lock_date_formatted = parsed_date.strftime('%d.%m.%Y %H:%M')
+            else:
+                lock_date_formatted = '<span class="info">не установлена</span>'
+            
+            is_delegated = "✅ Да" if user.get('isDelegated', False) else "❌ Нет"
+            has_forwarding = "✅ Да" if user.get('hasForwardingRules', False) else "❌ Нет"
+            
+            html += f"""
+        <tr>
+            <td>{idx}</td>
+            <td>{full_name}</td>
+            <td>{nickname}</td>
+            <td>{user_email}</td>
+            <td>{lock_date_formatted}</td>
+            <td>{user_id}</td>
+            <td>{is_delegated}</td>
+            <td>{has_forwarding}</td>
         </tr>
 """
         html += "    </table>\n"
@@ -255,12 +326,34 @@ def run(settings: SettingParams) -> bool:
     blocked_users = get_blocked_users(users)
     logger.info(f"Заблокированных пользователей: {len(blocked_users)}")
     
+    # Обогащаем информацию о пользователях (isDelegated, hasForwardingRules)
+    enrich_users(settings, blocked_users)
+    
     # Находим пользователей для удаления
     all_users_for_deletion = get_users_for_deletion(blocked_users, settings.delete_after_locked_days, settings.value_for_empty_date)
     
     # Загружаем исключения и фильтруем
     exceptions_set = load_blocked_users_exceptions(settings)
     users_for_deletion, exception_users = filter_exception_users(all_users_for_deletion, exceptions_set)
+    
+    # Исключаем пользователей с делегированными ящиками или правилами пересылки
+    delegated_or_forwarding_users = []
+    filtered_users_for_deletion = []
+    for user in users_for_deletion:
+        if user.get('isDelegated', False) or user.get('hasForwardingRules', False):
+            delegated_or_forwarding_users.append(user)
+            reason = []
+            if user.get('isDelegated', False):
+                reason.append("делегированный ящик")
+            if user.get('hasForwardingRules', False):
+                reason.append("правила пересылки")
+            logger.info(f"  [исключён из удаления - {', '.join(reason)}] {format_user_info(user)}")
+        else:
+            filtered_users_for_deletion.append(user)
+    users_for_deletion = filtered_users_for_deletion
+    
+    if delegated_or_forwarding_users:
+        logger.info(f"Исключено из удаления (делегирование/пересылка): {len(delegated_or_forwarding_users)}")
     
     if exception_users:
         logger.info(f"Пользователей-исключений (не подлежат удалению): {len(exception_users)}")
@@ -313,13 +406,13 @@ def run(settings: SettingParams) -> bool:
                     failed_users.append(user)
     
     # Отправляем отчёт об удалении
-    if (deleted_users or not_confirmed_users) and settings.alert_email:
+    if (deleted_users or not_confirmed_users or delegated_or_forwarding_users) and settings.alert_email:
         if deleted_users:
             subject = f"[Yandex 360] {'⚠️ Предупреждение' if settings.dry_run else '❌ Удаление'}: {len(deleted_users)} пользователей"
         else:
             subject = f"{settings.waiting_confirmation_subject}: {len(not_confirmed_users)} пользователей"
         
-        html_body = generate_deletion_report_html(settings, deleted_users, not_confirmed_users, settings.dry_run, exception_users)
+        html_body = generate_deletion_report_html(settings, deleted_users, not_confirmed_users, settings.dry_run, exception_users, delegated_or_forwarding_users)
         
         if send_email(settings, settings.alert_email, subject, html_body):
             logger.info(f"Отчёт об удалении отправлен на {settings.alert_email}")

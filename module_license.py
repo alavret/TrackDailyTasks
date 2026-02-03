@@ -15,6 +15,7 @@ from common import (
     get_settings,
     get_all_users,
     get_blocked_users,
+    enrich_users,
     sort_blocked_users_by_lock_date,
     get_users_near_deletion,
     parse_date,
@@ -85,6 +86,8 @@ def generate_license_alert_html(
             <th>Логин</th>
             <th>Email</th>
             <th>Дата блокировки</th>
+            <th>Делегирован</th>
+            <th>Правила пересылки</th>
         </tr>
 """
         for idx, user in enumerate(blocked_users, 1):
@@ -99,6 +102,9 @@ def generate_license_alert_html(
             else:
                 lock_date_formatted = '<span class="info" title="Используется значение по умолчанию">не установлена</span>'
             
+            is_delegated = "✅ Да" if user.get('isDelegated', False) else "❌ Нет"
+            has_forwarding = "✅ Да" if user.get('hasForwardingRules', False) else "❌ Нет"
+            
             html += f"""
         <tr>
             <td>{idx}</td>
@@ -106,6 +112,8 @@ def generate_license_alert_html(
             <td>{nickname}</td>
             <td>{email}</td>
             <td>{lock_date_formatted}</td>
+            <td>{is_delegated}</td>
+            <td>{has_forwarding}</td>
         </tr>
 """
         html += "    </table>\n"
@@ -123,6 +131,8 @@ def generate_license_alert_html(
             <th>Дата блокировки</th>
             <th>Дата удаления</th>
             <th>Осталось дней</th>
+            <th>Делегирован</th>
+            <th>Правила пересылки</th>
         </tr>
 """
         for idx, user in enumerate(near_deletion_users, 1):
@@ -143,6 +153,9 @@ def generate_license_alert_html(
             deletion_date_formatted = deletion_date.strftime('%d.%m.%Y') if deletion_date else 'неизвестно'
             days_left = user.get('_days_until_deletion', '?')
             
+            is_delegated = "✅ Да" if user.get('isDelegated', False) else "❌ Нет"
+            has_forwarding = "✅ Да" if user.get('hasForwardingRules', False) else "❌ Нет"
+            
             html += f"""
         <tr class="near-deletion">
             <td>{idx}</td>
@@ -152,6 +165,8 @@ def generate_license_alert_html(
             <td>{lock_date_formatted}</td>
             <td>{deletion_date_formatted}</td>
             <td>{days_left}</td>
+            <td>{is_delegated}</td>
+            <td>{has_forwarding}</td>
         </tr>
 """
         html += "    </table>\n"
@@ -167,6 +182,8 @@ def generate_license_alert_html(
             <th>Логин</th>
             <th>Email</th>
             <th>Дата блокировки</th>
+            <th>Делегирован</th>
+            <th>Правила пересылки</th>
         </tr>
 """
         for idx, user in enumerate(exception_users, 1):
@@ -181,6 +198,9 @@ def generate_license_alert_html(
             else:
                 lock_date_formatted = '<span class="info" title="Используется значение по умолчанию">не установлена</span>'
             
+            is_delegated = "✅ Да" if user.get('isDelegated', False) else "❌ Нет"
+            has_forwarding = "✅ Да" if user.get('hasForwardingRules', False) else "❌ Нет"
+            
             html += f"""
         <tr>
             <td>{idx}</td>
@@ -188,6 +208,8 @@ def generate_license_alert_html(
             <td>{nickname}</td>
             <td>{email}</td>
             <td>{lock_date_formatted}</td>
+            <td>{is_delegated}</td>
+            <td>{has_forwarding}</td>
         </tr>
 """
         html += "    </table>\n"
@@ -223,9 +245,15 @@ def run(settings: SettingParams) -> bool:
         logger.error("Не удалось получить список пользователей.")
         return False
     users = copy.deepcopy(users_original)
+
+
     
     # Подсчитываем активных и заблокированных
     blocked_users = get_blocked_users(users)
+    
+    # Обогащаем информацию о пользователях (isDelegated, hasForwardingRules)
+    enrich_users(settings, blocked_users)
+    
     active_users_count = len(users) - len(blocked_users)
     free_licenses = settings.licenses_count - len(users)
     

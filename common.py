@@ -25,6 +25,7 @@ from email.header import Header, decode_header
 # Константы
 DEFAULT_360_API_URL = "https://api360.yandex.net"
 USERS_PER_PAGE_FROM_API = 1000
+DELEGATE_MAILBOXES_PER_PAGE_FROM_API = 100
 MAX_RETRIES = 3
 RETRIES_DELAY_SEC = 2
 LOG_FILE = "track_tasks.log"
@@ -36,10 +37,15 @@ AUTO_CHECK_INTERVAL_SEC = 3600  # 1 час
 # Интервал обновления кэша пользователей (в минутах)
 ALL_USERS_REFRESH_IN_MINUTES = 15
 
+# Интервал обновления кэша делегированных почтовых ящиков (в минутах)
+ALL_DELEGATE_MAILBOXES_REFRESH_IN_MINUTES = 15
+
 # Необходимые права доступа для работы скрипта
 NEEDED_PERMISSIONS = [
     "directory:read_users",
-    "directory:write_users"
+    "directory:write_users",
+    "ya360_admin:mail_read_shared_mailbox_inventory",
+    "ya360_admin:mail_read_user_settings"
 ]
 
 # Настройка логирования
@@ -102,6 +108,10 @@ class SettingParams:
     # Кэш пользователей
     all_users: list
     all_users_get_timestamp: datetime
+
+    # Кэш делегированных почтовых ящиков
+    all_delegate_mailboxes: list
+    all_delegate_mailboxes_get_timestamp: datetime
     
     # Список модулей для запуска в режиме --auto
     run_modules: list = None
@@ -231,6 +241,8 @@ def get_settings():
         blocked_users_exceptions_file=os.environ.get("BLOCKED_USERS_EXCEPTIONS_FILE", "blocked_users_exceptions.txt"),
         all_users=[],
         all_users_get_timestamp=datetime.now(),
+        all_delegate_mailboxes = [],
+        all_delegate_mailboxes_get_timestamp = datetime.now(),
         run_modules=run_modules,
     )
     
@@ -410,6 +422,138 @@ def get_all_users(settings: SettingParams, force: bool = False) -> list:
     logger.info(f"Всего загружено {len(users)} пользователей.")
     return users
 
+def get_all_delegated_mailboxes(settings: "SettingParams", force = False, thread_id: int = 0):
+    thread_prefix = f"[THREAD #{thread_id}] " if thread_id > 0 else ""
+    if not force:
+        logger.info(f"{thread_prefix}Получение всех делегированных почтовых ящиков из кэша...")
+    if not settings.all_delegate_mailboxes or force or (datetime.now() - settings.all_delegate_mailboxes_get_timestamp).total_seconds() > ALL_DELEGATE_MAILBOXES_REFRESH_IN_MINUTES * 60:
+        settings.all_delegate_mailboxes = get_all_delegated_mailboxes_from_api(settings, per_page=DELEGATE_MAILBOXES_PER_PAGE_FROM_API, thread_id=thread_id)
+        settings.all_delegate_mailboxes_get_timestamp = datetime.now()
+    return settings.all_delegate_mailboxes
+
+def get_all_delegated_mailboxes_from_api(settings: "SettingParams", per_page: int = DELEGATE_MAILBOXES_PER_PAGE_FROM_API, thread_id: int = 0):
+    """
+    Получает полный список всех делегированных почтовых ящиков в организации (все страницы).
+    
+    Args:
+        settings: Объект настроек с oauth_token и organization_id
+        per_page: Количество записей на одной странице ответа (по умолчанию 100)
+        thread_id: Идентификатор потока для логирования
+        
+    Returns:
+        list: Список объектов с полями resourceId и count
+        None: в случае ошибки
+    """
+    # Формируем префикс для логов
+    thread_prefix = f"[THREAD #{thread_id}] " if thread_id > 0 else ""
+    
+    logger.info(f"{thread_prefix}Получение полного списка всех делегированных ящиков...")
+    all_resources = []
+    current_page = 1
+    
+    while True:
+        result = get_delegated_mailboxes(settings, page=current_page, per_page=per_page, thread_id=thread_id)
+        
+        if result is None:
+            logger.error(f"{thread_prefix}Ошибка при получении делегированных ящиков. Возвращается пустой список.")
+            return []
+        
+        resources = result.get('resources', [])
+        all_resources.extend(resources)
+        
+        total = result.get('total', 0)
+        
+        logger.debug(f"{thread_prefix}Загружено {len(resources)} делегированных ящиков. Всего получено: {len(all_resources)} из {total}")
+        
+        # Проверяем, есть ли еще страницы
+        if len(all_resources) >= total or len(resources) == 0:
+            break
+            
+        current_page += 1
+    
+    logger.info(f"{thread_prefix}Всего получено {len(all_resources)} делегированных ящиков")
+    return all_resources
+
+def get_delegated_mailboxes(settings: "SettingParams", page: int = 1, per_page: int = 10, thread_id: int = 0):
+    """
+    Получает список делегированных почтовых ящиков в организации.
+    
+    Args:
+        settings: Объект настроек с oauth_token и organization_id
+        page: Номер страницы ответа (по умолчанию 1)
+        per_page: Количество записей на одной странице ответа (по умолчанию 10)
+        thread_id: Идентификатор потока для логирования
+        
+    Returns:
+        dict: Словарь с полями:
+            - resources: список объектов с resourceId и count
+            - page: номер страницы
+            - perPage: количество записей на странице
+            - total: общее количество записей
+        None: в случае ошибки
+    """
+    # Формируем префикс для логов
+    thread_prefix = f"[THREAD #{thread_id}] " if thread_id > 0 else ""
+    
+    logger.info(f"{thread_prefix}Получение списка делегированных ящиков (страница {page}, записей на странице: {per_page})...")
+    url = f"{DEFAULT_360_API_URL}/admin/v1/org/{settings.org_id}/mailboxes/delegated"
+    headers = {"Authorization": f"OAuth {settings.oauth_token}"}
+    params = {'page': page, 'perPage': per_page}
+    
+    try:
+        retries = 1
+        while True:
+            logger.debug(f"{thread_prefix}GET URL - {url}")
+            response = requests.get(url, headers=headers, params=params)
+            logger.debug(f"{thread_prefix}x-request-id: {response.headers.get('x-request-id','')}")
+            
+            if response.status_code != HTTPStatus.OK.value:
+                logger.error(f"{thread_prefix}!!! ОШИБКА !!! при GET запросе url - {url}: {response.status_code}. Сообщение об ошибке: {response.text}")
+                if retries < MAX_RETRIES:
+                    logger.error(f"{thread_prefix}Повторная попытка ({retries+1}/{MAX_RETRIES})")
+                    time.sleep(RETRIES_DELAY_SEC * retries)
+                    retries += 1
+                else:
+                    logger.error(f"{thread_prefix}Превышено максимальное количество попыток. Возвращается None.")
+                    return None
+            else:
+                result = response.json()
+                logger.info(f"{thread_prefix}Успешно получено {len(result.get('resources', []))} делегированных ящиков. " 
+                           f"Страница {result.get('page', page)} из {result.get('total', 0) // result.get('perPage', per_page) + 1}")
+                return result
+                
+    except requests.exceptions.RequestException as e:
+        logger.error(f"{thread_prefix}!!! ERROR !!! {type(e).__name__} at line {e.__traceback__.tb_lineno} of {__file__}: {e}")
+        return None
+
+def get_forward_rules_from_api(settings: "SettingParams", user):
+    logger.debug(f"Получаем правило пересылки для пользователя {user['id']} ({user['nickname']})...")
+    url = f"{DEFAULT_360_API_URL}/admin/v1/org/{settings.org_id}/mail/users/{user['id']}/settings/user_rules"
+    headers = {"Authorization": f"OAuth {settings.oauth_token}"}
+    data = {}
+    try:
+        retries = 1
+        while True:
+            logger.debug(f"GET url - {url}")
+            response = requests.get(url, headers=headers)
+            logger.debug(f"x-request-id: {response.headers.get('x-request-id','')}")
+            if response.status_code != HTTPStatus.OK.value:
+                logger.error(f"ОШИБКА при запросе GET для пользователя {user['id']}: {response.status_code}. Сообщение об ошибке: {response.text}")
+                if retries < MAX_RETRIES:
+                    logger.error(f"Повторная попытка ({retries+1}/{MAX_RETRIES})")
+                    time.sleep(RETRIES_DELAY_SEC * retries)
+                    retries += 1
+                else:
+                    logger.error(f"ОШИБКА. Получение правил пересылки для пользователя {user['id']} ({user['nickname']}) не удалось.")
+                    break
+            else:
+                data = response.json()
+                break
+    except requests.exceptions.RequestException as e:
+        logger.error(f"{type(e).__name__} на строке {e.__traceback__.tb_lineno} в файле {__file__}: {e}")
+        return []
+    return data
+
 
 def get_blocked_users(users: list) -> list:
     """Возвращает список заблокированных пользователей."""
@@ -418,6 +562,46 @@ def get_blocked_users(users: list) -> list:
         if not user.get('isEnabled', True):
             blocked.append(user)
     return blocked
+
+
+def enrich_users(settings: "SettingParams", users: list) -> list:
+    """
+    Обогащает список пользователей дополнительной информацией.
+    
+    Добавляет поля:
+        - isDelegated: True если почтовый ящик пользователя является делегированным
+        - hasForwardingRules: True если у пользователя настроены правила пересылки
+    
+    Args:
+        settings: Объект настроек
+        users: Список пользователей для обогащения
+        
+    Returns:
+        list: Обогащённый список пользователей
+    """
+    # Получаем делегированные почтовые ящики
+    delegated_mailboxes = get_all_delegated_mailboxes(settings)
+    delegated_uids = {str(mb.get('resourceId', '')) for mb in delegated_mailboxes}
+    
+    logger.info(f"Обогащение информации для {len(users)} пользователей...")
+    logger.debug(f"Делегированных ящиков: {len(delegated_uids)}")
+    
+    for user in users:
+        user_id = str(user.get('id', ''))
+        
+        # Проверяем, является ли пользователь делегированным
+        user['isDelegated'] = user_id in delegated_uids
+        
+        # Проверяем наличие правил пересылки
+        forward_rules = get_forward_rules_from_api(settings, user)
+        user['hasForwardingRules'] = bool(forward_rules.get('forwards'))
+        
+        if user['isDelegated']:
+            logger.debug(f"Пользователь {user.get('nickname', '')} ({user_id}) имеет делегированный ящик")
+        if user['hasForwardingRules']:
+            logger.debug(f"Пользователь {user.get('nickname', '')} ({user_id}) имеет правила пересылки")
+    
+    return users
 
 
 def parse_date(date_str: str) -> datetime:

@@ -67,3 +67,5 @@ python-env-tools/**
 !fields_spec.txt
 !users.csv
 !requirements.txt
+!track_cron.txt
+!blocked_users_exceptions.txt
