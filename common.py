@@ -9,6 +9,8 @@ import logging.handlers as handlers
 import time
 import re
 import html
+import concurrent.futures
+from functools import partial
 import requests
 import smtplib
 import imaplib
@@ -40,12 +42,19 @@ ALL_USERS_REFRESH_IN_MINUTES = 15
 # Интервал обновления кэша делегированных почтовых ящиков (в минутах)
 ALL_DELEGATE_MAILBOXES_REFRESH_IN_MINUTES = 15
 
+DEPARTMENTS_PER_PAGE_FROM_API = 1000
+ALL_DEPS_REFRESH_IN_MINUTES = 15
+
+# Максимальное число одновременных вызовов get_forward_rules_from_api при обогащении пользователей
+THREAD_COUNT = 5
+
 # Необходимые права доступа для работы скрипта
 NEEDED_PERMISSIONS = [
     "directory:read_users",
     "directory:write_users",
     "ya360_admin:mail_read_shared_mailbox_inventory",
-    "ya360_admin:mail_read_user_settings"
+    "ya360_admin:mail_read_user_settings",
+    "directory:read_departments"
 ]
 
 # Настройка логирования
@@ -82,7 +91,7 @@ class SettingParams:
     # Параметры для отслеживания лицензий
     licenses_count: int
     licenses_threshold: int
-    alert_email: str
+    alert_emails: list  # Список email адресов для уведомлений
     
     # Параметры для удаления пользователей
     delete_after_locked_days: int
@@ -112,6 +121,9 @@ class SettingParams:
     # Кэш делегированных почтовых ящиков
     all_delegate_mailboxes: list
     all_delegate_mailboxes_get_timestamp: datetime
+
+    all_deps: list
+    all_deps_get_timestamp: datetime
     
     # Список модулей для запуска в режиме --auto
     run_modules: list = None
@@ -146,9 +158,22 @@ def get_settings():
         logger.error("ORG_ID не установлен.")
         exit_flag = True
     
-    alert_email = os.environ.get("ALERT_EMAIL", "")
-    if not alert_email:
-        logger.warning("ALERT_EMAIL не установлен. Уведомления не будут отправляться.")
+    # Парсинг списка email адресов для уведомлений
+    alert_emails_str = os.environ.get("ALERT_EMAILS", "")
+    alert_emails = []
+    if alert_emails_str:
+        # Разделяем по запятой или пробелу
+        email_pattern = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
+        raw_emails = re.split(r'[,\s]+', alert_emails_str)
+        for email_addr in raw_emails:
+            email_addr = email_addr.strip()
+            if email_addr:
+                if email_pattern.match(email_addr):
+                    alert_emails.append(email_addr)
+                else:
+                    logger.warning(f"Некорректный email адрес в ALERT_EMAILS: {email_addr}")
+    if not alert_emails:
+        logger.warning("ALERT_EMAILS не установлен или не содержит корректных адресов. Уведомления не будут отправляться.")
     
     licenses_count = os.environ.get("LICENSES_COUNT", "0")
     try:
@@ -223,7 +248,7 @@ def get_settings():
         smtp_type=os.environ.get("SMTP_TYPE", "ssl"),
         licenses_count=licenses_count,
         licenses_threshold=licenses_threshold,
-        alert_email=alert_email,
+        alert_emails=alert_emails,
         delete_after_locked_days=delete_after_locked_days,
         warning_days=warning_days,
         delete_users=os.environ.get("DELETE_USERS", "false").lower() == "true",
@@ -243,6 +268,8 @@ def get_settings():
         all_users_get_timestamp=datetime.now(),
         all_delegate_mailboxes = [],
         all_delegate_mailboxes_get_timestamp = datetime.now(),
+        all_deps = [],
+        all_deps_get_timestamp = datetime.now(),
         run_modules=run_modules,
     )
     
@@ -554,6 +581,65 @@ def get_forward_rules_from_api(settings: "SettingParams", user):
         return []
     return data
 
+def get_all_api360_departments(settings: "SettingParams", force = False, show_messages = False):
+    if not force:
+        if show_messages:
+            logger.info("Получение всех подразделений организации из кэша...")
+        else:
+            logger.debug("Получение всех подразделений организации из кэша...")
+    if not settings.all_deps or force or (datetime.now() - settings.all_deps_get_timestamp).total_seconds() > ALL_DEPS_REFRESH_IN_MINUTES * 60:
+        settings.all_deps = get_all_api360_departments_from_api(settings)
+        settings.all_deps_get_timestamp = datetime.now()
+    return settings.all_deps
+
+def get_all_api360_departments_from_api(settings: "SettingParams"):
+    logger.info("Получение всех подразделений организации из API...")
+    url = f'{DEFAULT_360_API_URL}/directory/v1/org/{settings.org_id}/departments'
+    headers = {"Authorization": f"OAuth {settings.oauth_token}"}
+
+    has_errors = False
+    departments = []
+    current_page = 1
+    last_page = 1
+    while current_page <= last_page:
+        params = {'page': current_page, 'perPage': DEPARTMENTS_PER_PAGE_FROM_API}
+        try:
+            retries = 1
+            while True:
+                logger.debug(f"GET URL - {url}")
+                response = requests.get(url, headers=headers, params=params)
+                logger.debug(f"x-request-id: {response.headers.get('x-request-id','')}")
+                if response.status_code != HTTPStatus.OK.value:
+                    logger.error(f"!!! ОШИБКА !!! при GET запросе url - {url}: {response.status_code}. Сообщение об ошибке: {response.text}")
+                    if retries < MAX_RETRIES:
+                        logger.error(f"Повторная попытка ({retries+1}/{MAX_RETRIES})")
+                        time.sleep(RETRIES_DELAY_SEC * retries)
+                        retries += 1
+                    else:
+                        has_errors = True
+                        break
+                else:
+                    for deps in response.json()['departments']:
+                        departments.append(deps)
+                    logger.debug(f"Загружено {len(response.json()['departments'])} подразделений. Текущая страница - {current_page} (всего {last_page} страниц).")
+                    current_page += 1
+                    last_page = response.json()['pages']
+                    break
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"!!! ERROR !!! {type(e).__name__} at line {e.__traceback__.tb_lineno} of {__file__}: {e}")
+            has_errors = True
+            break
+
+        if has_errors:
+            break
+
+    if has_errors:
+        print("Есть ошибки при GET запросах. Возвращается пустой список подразделений.")
+        return []
+    
+    return departments
+
 
 def get_blocked_users(users: list) -> list:
     """Возвращает список заблокированных пользователей."""
@@ -582,24 +668,35 @@ def enrich_users(settings: "SettingParams", users: list) -> list:
     # Получаем делегированные почтовые ящики
     delegated_mailboxes = get_all_delegated_mailboxes(settings)
     delegated_uids = {str(mb.get('resourceId', '')) for mb in delegated_mailboxes}
+
+    deps = get_all_api360_departments(settings)
+    deps_dict = {dep.get('id'): dep.get('name') for dep in deps}
     
     logger.info(f"Обогащение информации для {len(users)} пользователей...")
     logger.debug(f"Делегированных ящиков: {len(delegated_uids)}")
-    
-    for user in users:
+
+    # Вызов get_forward_rules_from_api в пуле потоков (не более THREAD_COUNT одновременно)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=THREAD_COUNT) as executor:
+        forward_rules_list = list(executor.map(partial(get_forward_rules_from_api, settings), users))
+
+    for user, forward_rules in zip(users, forward_rules_list):
         user_id = str(user.get('id', ''))
         
         # Проверяем, является ли пользователь делегированным
         user['isDelegated'] = user_id in delegated_uids
         
-        # Проверяем наличие правил пересылки
-        forward_rules = get_forward_rules_from_api(settings, user)
-        user['hasForwardingRules'] = bool(forward_rules.get('forwards'))
+        # Наличие правил пересылки (результат асинхронного вызова)
+        user['hasForwardingRules'] = bool(forward_rules.get('forwards') if forward_rules else False)
         
         if user['isDelegated']:
             logger.debug(f"Пользователь {user.get('nickname', '')} ({user_id}) имеет делегированный ящик")
         if user['hasForwardingRules']:
             logger.debug(f"Пользователь {user.get('nickname', '')} ({user_id}) имеет правила пересылки")
+
+        if user['departmentId'] == 1:
+            user['department'] = ""
+        else:
+            user['department'] = deps_dict[user['departmentId']]
     
     return users
 
@@ -747,16 +844,39 @@ def delete_user_by_api(settings: SettingParams, user_id: str) -> tuple:
     return False, {}
 
 
-def send_email(settings: SettingParams, to_email: str, subject: str, html_body: str) -> bool:
-    """Отправляет email сообщение по SMTP."""
+def send_email(settings: SettingParams, to_email: str, subject: str, html_body: str, include_alert_emails: bool = True) -> bool:
+    """
+    Отправляет email сообщение по SMTP.
+    
+    Args:
+        settings: Параметры настроек
+        to_email: Основной адрес получателя
+        subject: Тема письма
+        html_body: HTML тело письма
+        include_alert_emails: Если True, добавляет все адреса из settings.alert_emails в To:
+    
+    Returns:
+        True если письмо отправлено успешно, False в противном случае
+    """
     if not all([settings.smtp_server, settings.smtp_port, settings.smtp_login, settings.smtp_password]):
         logger.error("Не заданы параметры SMTP сервера в файле .env")
         return False
     
     try:
+        # Формируем список получателей
+        recipients = [to_email] if to_email else []
+        if include_alert_emails and settings.alert_emails:
+            for alert_addr in settings.alert_emails:
+                if alert_addr not in recipients:
+                    recipients.append(alert_addr)
+        
+        if not recipients:
+            logger.error("Не указаны получатели для отправки email")
+            return False
+        
         msg = MIMEMultipart('alternative')
         msg['From'] = settings.smtp_from_email if settings.smtp_from_email else settings.smtp_login
-        msg['To'] = to_email
+        msg['To'] = ', '.join(recipients)
         msg['Subject'] = Header(subject, 'utf-8')
         
         html_part = MIMEText(html_body, 'html', 'utf-8')
@@ -768,17 +888,17 @@ def send_email(settings: SettingParams, to_email: str, subject: str, html_body: 
             with smtplib.SMTP_SSL(settings.smtp_server, settings.smtp_port, timeout=SMTP_TIMEOUT) as server:
                 logger.debug(f"Аутентификация как {settings.smtp_login}")
                 server.login(settings.smtp_login, settings.smtp_password)
-                logger.debug(f"Отправка письма на {to_email}")
+                logger.debug(f"Отправка письма на {', '.join(recipients)}")
                 server.send_message(msg)
         else:  # starttls
             with smtplib.SMTP(settings.smtp_server, settings.smtp_port, timeout=SMTP_TIMEOUT) as server:
                 server.starttls()
                 logger.debug(f"Аутентификация как {settings.smtp_login}")
                 server.login(settings.smtp_login, settings.smtp_password)
-                logger.debug(f"Отправка письма на {to_email}")
+                logger.debug(f"Отправка письма на {', '.join(recipients)}")
                 server.send_message(msg)
         
-        logger.info(f"Email успешно отправлен на адрес {to_email}")
+        logger.info(f"Email успешно отправлен на адрес(а): {', '.join(recipients)}")
         return True
         
     except smtplib.SMTPAuthenticationError as e:
