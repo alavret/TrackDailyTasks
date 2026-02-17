@@ -82,6 +82,7 @@ def generate_deletion_report_html(
             <th>ФИО</th>
             <th>Логин</th>
             <th>Email</th>
+            <th>Должность / Отдел</th>
             <th>Дата блокировки</th>
             <th>ID</th>
             <th>Делегирован</th>
@@ -95,6 +96,9 @@ def generate_deletion_report_html(
             nickname = user.get('nickname', '')
             user_email = user.get('email', '')
             user_id = user.get('id', '')
+            position = user.get('position', '')
+            department = user.get('department', {}).get('name', '') if isinstance(user.get('department'), dict) else user.get('department', '')
+            position_dept = f"{position}, {department}".strip(', ') if position or department else ''
             lock_date_unknown = user.get('_lock_date_unknown', False)
             lock_date = user.get('isEnabledUpdatedAt', '')
             parsed_date = parse_date(lock_date)
@@ -114,6 +118,7 @@ def generate_deletion_report_html(
             <td>{full_name}</td>
             <td>{nickname}</td>
             <td>{user_email}</td>
+            <td>{position_dept}</td>
             <td>{lock_date_formatted}</td>
             <td>{user_id}</td>
             <td>{is_delegated}</td>
@@ -154,6 +159,7 @@ def generate_deletion_report_html(
             <th>ФИО</th>
             <th>Логин</th>
             <th>Email</th>
+            <th>Должность / Отдел</th>
             <th>Дата блокировки</th>
             <th>ID</th>
             <th>Делегирован</th>
@@ -167,6 +173,9 @@ def generate_deletion_report_html(
             nickname = user.get('nickname', '')
             user_email = user.get('email', '')
             user_id = user.get('id', '')
+            position = user.get('position', '')
+            department = user.get('department', {}).get('name', '') if isinstance(user.get('department'), dict) else user.get('department', '')
+            position_dept = f"{position}, {department}".strip(', ') if position or department else ''
             lock_date_unknown = user.get('_lock_date_unknown', False)
             lock_date = user.get('isEnabledUpdatedAt', '')
             parsed_date = parse_date(lock_date)
@@ -186,6 +195,7 @@ def generate_deletion_report_html(
             <td>{full_name}</td>
             <td>{nickname}</td>
             <td>{user_email}</td>
+            <td>{position_dept}</td>
             <td>{lock_date_formatted}</td>
             <td>{user_id}</td>
             <td>{is_delegated}</td>
@@ -205,6 +215,7 @@ def generate_deletion_report_html(
             <th>ФИО</th>
             <th>Логин</th>
             <th>Email</th>
+            <th>Должность / Отдел</th>
             <th>Дата блокировки</th>
             <th>ID</th>
             <th>Делегирован</th>
@@ -217,6 +228,9 @@ def generate_deletion_report_html(
             nickname = user.get('nickname', '')
             user_email = user.get('email', '')
             user_id = user.get('id', '')
+            position = user.get('position', '')
+            department = user.get('department', {}).get('name', '') if isinstance(user.get('department'), dict) else user.get('department', '')
+            position_dept = f"{position}, {department}".strip(', ') if position or department else ''
             lock_date = user.get('isEnabledUpdatedAt', '')
             parsed_date = parse_date(lock_date)
             if parsed_date:
@@ -233,6 +247,7 @@ def generate_deletion_report_html(
             <td>{full_name}</td>
             <td>{nickname}</td>
             <td>{user_email}</td>
+            <td>{position_dept}</td>
             <td>{lock_date_formatted}</td>
             <td>{user_id}</td>
             <td>{is_delegated}</td>
@@ -251,6 +266,7 @@ def generate_deletion_report_html(
             <th>ФИО</th>
             <th>Логин</th>
             <th>Email</th>
+            <th>Должность / Отдел</th>
             <th>Дата блокировки</th>
             <th>ID</th>
             <th>Делегирован</th>
@@ -263,6 +279,9 @@ def generate_deletion_report_html(
             nickname = user.get('nickname', '')
             user_email = user.get('email', '')
             user_id = user.get('id', '')
+            position = user.get('position', '')
+            department = user.get('department', {}).get('name', '') if isinstance(user.get('department'), dict) else user.get('department', '')
+            position_dept = f"{position}, {department}".strip(', ') if position or department else ''
             lock_date = user.get('isEnabledUpdatedAt', '')
             parsed_date = parse_date(lock_date)
             if parsed_date:
@@ -279,6 +298,7 @@ def generate_deletion_report_html(
             <td>{full_name}</td>
             <td>{nickname}</td>
             <td>{user_email}</td>
+            <td>{position_dept}</td>
             <td>{lock_date_formatted}</td>
             <td>{user_id}</td>
             <td>{is_delegated}</td>
@@ -406,7 +426,7 @@ def run(settings: SettingParams) -> bool:
                     failed_users.append(user)
     
     # Отправляем отчёт об удалении
-    if (deleted_users or not_confirmed_users or delegated_or_forwarding_users) and settings.alert_email:
+    if (deleted_users or not_confirmed_users or delegated_or_forwarding_users) and settings.alert_emails:
         if deleted_users:
             subject = f"[Yandex 360] {'⚠️ Предупреждение' if settings.dry_run else '❌ Удаление'}: {len(deleted_users)} пользователей"
         else:
@@ -414,8 +434,8 @@ def run(settings: SettingParams) -> bool:
         
         html_body = generate_deletion_report_html(settings, deleted_users, not_confirmed_users, settings.dry_run, exception_users, delegated_or_forwarding_users)
         
-        if send_email(settings, settings.alert_email, subject, html_body):
-            logger.info(f"Отчёт об удалении отправлен на {settings.alert_email}")
+        if send_email(settings, "", subject, html_body):
+            logger.info(f"Отчёт об удалении отправлен на {', '.join(settings.alert_emails)}")
         else:
             logger.error("Не удалось отправить отчёт по email.")
     

@@ -894,7 +894,7 @@ def parse_arguments():
     DRY_RUN                  - Режим пробного запуска (True/False)
     LICENSES_COUNT           - Общее количество лицензий
     LICENSES_THRESHOLD       - Пороговое количество свободных лицензий для уведомления
-    ALERT_EMAIL              - Email для отправки уведомлений
+    ALERT_EMAILS             - Email для отправки уведомлений (через запятую)
     DELETE_AFTER_LOCKED_DAYS - Количество дней блокировки для удаления
     WARNING_DAYS             - За сколько дней предупреждать об удалении
     DELETE_USERS             - Разрешить удаление пользователей (True/False)
@@ -957,7 +957,7 @@ def main():
     logger.info(f"DELETE_AFTER_LOCKED_DAYS: {settings.delete_after_locked_days}")
     logger.info(f"WARNING_DAYS: {settings.warning_days}")
     logger.info(f"DELETE_USERS: {settings.delete_users}")
-    logger.info(f"ALERT_EMAIL: {settings.alert_email}")
+    logger.info(f"ALERT_EMAILS: {', '.join(settings.alert_emails) if settings.alert_emails else 'не задан'}")
     logger.info(f"IMAP_SERVER: {settings.imap_server if settings.imap_server else 'не задан'}")
     logger.info(f"CHECK_IMAP_DAYS: {settings.check_imap_days}")
     logger.info(f"CONFIRM_MESSAGE_SUBJECT: {settings.confirm_message_subject}")

@@ -85,6 +85,7 @@ def generate_license_alert_html(
             <th>ФИО</th>
             <th>Логин</th>
             <th>Email</th>
+            <th>Должность / Отдел</th>
             <th>Дата блокировки</th>
             <th>Делегирован</th>
             <th>Правила пересылки</th>
@@ -95,6 +96,9 @@ def generate_license_alert_html(
             full_name = f"{name.get('last', '')} {name.get('first', '')} {name.get('middle', '')}".strip()
             nickname = user.get('nickname', '')
             email = user.get('email', '')
+            position = user.get('position', '')
+            department = user.get('department', {}).get('name', '') if isinstance(user.get('department'), dict) else user.get('department', '')
+            position_dept = f"{position}, {department}".strip(', ') if position or department else ''
             lock_date = user.get('isEnabledUpdatedAt', '')
             parsed_date = parse_date(lock_date)
             if parsed_date:
@@ -111,6 +115,7 @@ def generate_license_alert_html(
             <td>{full_name}</td>
             <td>{nickname}</td>
             <td>{email}</td>
+            <td>{position_dept}</td>
             <td>{lock_date_formatted}</td>
             <td>{is_delegated}</td>
             <td>{has_forwarding}</td>
@@ -128,6 +133,7 @@ def generate_license_alert_html(
             <th>ФИО</th>
             <th>Логин</th>
             <th>Email</th>
+            <th>Должность / Отдел</th>
             <th>Дата блокировки</th>
             <th>Дата удаления</th>
             <th>Осталось дней</th>
@@ -140,6 +146,9 @@ def generate_license_alert_html(
             full_name = f"{name.get('last', '')} {name.get('first', '')} {name.get('middle', '')}".strip()
             nickname = user.get('nickname', '')
             email = user.get('email', '')
+            position = user.get('position', '')
+            department = user.get('department', {}).get('name', '') if isinstance(user.get('department'), dict) else user.get('department', '')
+            position_dept = f"{position}, {department}".strip(', ') if position or department else ''
             lock_date_unknown = user.get('_lock_date_unknown', False)
             lock_date = user.get('isEnabledUpdatedAt', '')
             parsed_date = parse_date(lock_date)
@@ -162,6 +171,7 @@ def generate_license_alert_html(
             <td>{full_name}</td>
             <td>{nickname}</td>
             <td>{email}</td>
+            <td>{position_dept}</td>
             <td>{lock_date_formatted}</td>
             <td>{deletion_date_formatted}</td>
             <td>{days_left}</td>
@@ -181,6 +191,7 @@ def generate_license_alert_html(
             <th>ФИО</th>
             <th>Логин</th>
             <th>Email</th>
+            <th>Должность / Отдел</th>
             <th>Дата блокировки</th>
             <th>Делегирован</th>
             <th>Правила пересылки</th>
@@ -191,6 +202,9 @@ def generate_license_alert_html(
             full_name = f"{name.get('last', '')} {name.get('first', '')} {name.get('middle', '')}".strip()
             nickname = user.get('nickname', '')
             email = user.get('email', '')
+            position = user.get('position', '')
+            department = user.get('department', {}).get('name', '') if isinstance(user.get('department'), dict) else user.get('department', '')
+            position_dept = f"{position}, {department}".strip(', ') if position or department else ''
             lock_date = user.get('isEnabledUpdatedAt', '')
             parsed_date = parse_date(lock_date)
             if parsed_date:
@@ -207,6 +221,7 @@ def generate_license_alert_html(
             <td>{full_name}</td>
             <td>{nickname}</td>
             <td>{email}</td>
+            <td>{position_dept}</td>
             <td>{lock_date_formatted}</td>
             <td>{is_delegated}</td>
             <td>{has_forwarding}</td>
@@ -307,8 +322,8 @@ def run(settings: SettingParams) -> bool:
     should_send_alert = free_licenses < settings.licenses_threshold
     
     if should_send_alert or near_deletion:
-        if not settings.alert_email:
-            logger.warning("ALERT_EMAIL не установлен, уведомление не будет отправлено.")
+        if not settings.alert_emails:
+            logger.warning("ALERT_EMAILS не установлен, уведомление не будет отправлено.")
             return True
         
         if should_send_alert:
@@ -328,8 +343,8 @@ def run(settings: SettingParams) -> bool:
             exception_users
         )
         
-        if send_email(settings, settings.alert_email, subject, html_body):
-            logger.info(f"Уведомление отправлено на {settings.alert_email}")
+        if send_email(settings, "", subject, html_body):
+            logger.info(f"Уведомление отправлено на {', '.join(settings.alert_emails)}")
         else:
             logger.error("Не удалось отправить уведомление по email.")
     else:
